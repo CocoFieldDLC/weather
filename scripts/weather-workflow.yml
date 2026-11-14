@@ -5,14 +5,14 @@
 # API-токен, которым наполняется репозиторий, не имеет права писать в .github/workflows —
 # GitHub отвечает 404, поэтому файл не создаётся автоматически.
 #
-# После создания: Actions → weather → Run workflow (первый запуск вручную, дальше раз в 15 минут).
+# После создания: Actions → weather → Run workflow (первый запуск вручную, дальше раз в 5 минут).
 
 name: weather
 
 # GitHub Pages serves static files only, so the .txt is rebuilt here.
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
