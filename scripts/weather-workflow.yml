@@ -1,0 +1,46 @@
+# Скопируйте этот файл в .github/workflows/weather.yml через веб-интерфейс GitHub
+# (Add file → Create new file → путь .github/workflows/weather.yml), затем вставьте содержимое.
+#
+# Почему не лежит сразу на месте: токен, которым я писал в репозиторий, не имеет права
+# создавать файлы в .github/workflows (GitHub отдаёт 404 на такие запросы). Через веб-интерфейс
+# это делается в пару кликов и работает.
+
+name: weather
+
+# GitHub Pages serves static files only, so the text the mesh auto-responder reads is rebuilt here.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weather
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Rebuild the text files
+        run: python scripts/weather.py
+
+      - name: Commit if the weather changed
+        run: |
+          git config user.name "weather-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "no change"
+            exit 0
+          fi
+          git add -A
+          git commit -m "chore: refresh weather"
+          git push
