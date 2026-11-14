@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Погода в Пятигорске</title>
+</head>
+<body style="white-space:pre-wrap">
+<script>
+const LAT = 44.0486;
+const LON = 43.0594;
+const NAME = "Пятигорске";
+
+const SYMBOLS = {
+  clearsky: "ясно",
+  fair: "малооблачно",
+  partlycloudy: "облачно с прояснениями",
+  cloudy: "облачно",
+  fog: "туман",
+  lightrain: "небольшой дождь",
+  rain: "дождь",
+  heavyrain: "сильный дождь",
+  lightrainshowers: "небольшой дождь",
+  rainshowers: "ливневый дождь",
+  heavyrainshowers: "сильный ливень",
+  lightsleet: "небольшой мокрый снег",
+  sleet: "мокрый снег",
+  heavysleet: "сильный мокрый снег",
+  lightsnow: "небольшой снег",
+  snow: "снег",
+  heavysnow: "сильный снег",
+  lightsnowshowers: "небольшой снег",
+  snowshowers: "снегопад",
+  heavysnowshowers: "сильный снегопад"
+};
+
+const THUNDER = {
+  rain: "дождь с грозой",
+  sleet: "мокрый снег с грозой",
+  snow: "снег с грозой"
+};
+
+function baseCode(code) {
+  return code ? code.replace(/_(day|night|polartwilight)$/, "") : "";
+}
+
+function describe(code) {
+  const base = baseCode(code);
+  if (!base) return "";
+  if (base.endsWith("andthunder")) {
+    const k = base.slice(0, -"andthunder".length);
+    if (THUNDER[k]) return THUNDER[k];
+    if (k === "partlycloudy") return "облачно с прояснениями, возможна гроза";
+  }
+  return SYMBOLS[base] || base;
+}
+
+function isPrecip(code) {
+  return /rain|sleet|snow|thunder/.test(baseCode(code));
+}
+
+function cap(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+const HORIZON = 6 * 3600 * 1000;
+
+fetch("https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=" + LAT + "&lon=" + LON)
+  .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+  .then(d => {
+    const series = d.properties.timeseries;
+    const now = series[0];
+    const det = now.data.instant.details;
+    const local = now.data.next_1_hours || now.data.next_6_hours;
+    const code = local && local.summary ? local.summary.symbol_code : "";
+    const desc = describe(code);
+
+    const t0 = new Date(now.time).getTime();
+    const soon = series.filter(e => {
+      const t = new Date(e.time).getTime();
+      return t >= t0 && t < t0 + HORIZON;
+    });
+
+    let precipAmount = 0;
+    let precipDesc = "";
+    for (const e of soon) {
+      const h1 = e.data.next_1_hours;
+      const h6 = e.data.next_6_hours;
+      const amt = h1 && h1.details ? (h1.details.precipitation_amount || 0)
+                : (h6 && h6.details ? (h6.details.precipitation_amount || 0) : 0);
+      precipAmount += amt;
+      const c = h1 ? h1.summary.symbol_code : (h6 ? h6.summary.symbol_code : "");
+      if (!precipDesc && isPrecip(c)) precipDesc = describe(c);
+    }
+
+    let precipLine;
+    if (precipAmount > 0.1 || precipDesc) {
+      precipLine = precipDesc
+        ? "В ближайшее время ожидается " + precipDesc
+        : "В ближайшее время ожидаются осадки";
+    } else {
+      precipLine = "В ближайшее время осадков не ожидается";
+    }
+
+    document.body.textContent = [
+      "Погода в " + NAME + ":",
+      cap(desc) + ", " + Math.round(det.air_temperature) + "°C",
+      "Облачность " + Math.round(det.cloud_area_fraction) + "%",
+      precipLine
+    ].join("\n");
+  })
+  .catch(e => {
+    document.body.textContent = "не удалось получить погоду: " + e.message;
+  });
+</script>
+</body>
+</html>
