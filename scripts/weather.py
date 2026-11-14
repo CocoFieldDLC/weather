@@ -8,6 +8,7 @@ the .txt is for anything that cannot run it.
 
 import json
 import math
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -22,41 +23,44 @@ FORECAST_URLS = [
     "https://ensemble-api.open-meteo.com/v1/ensemble?{query}&models=icon_seamless",
 ]
 
+# The whole line must stay readable in one Meshtastic message.
+MAX_LENGTH = 180
+
 WMO = {
-    0: "Ясно",
-    1: "Малооблачно",
-    2: "Переменная облачность",
-    3: "Облачно",
-    45: "Туман",
-    48: "Изморозь",
-    51: "Слабая морось",
-    53: "Морось",
-    55: "Сильная морось",
-    56: "Ледяная морось",
-    57: "Сильная ледяная морось",
-    61: "Небольшой дождь",
-    63: "Дождь",
-    65: "Сильный дождь",
-    66: "Ледяной дождь",
-    67: "Сильный ледяной дождь",
-    71: "Небольшой снег",
-    73: "Снег",
-    75: "Сильный снег",
-    77: "Снежная крупа",
-    80: "Ливень",
-    81: "Сильный ливень",
-    82: "Очень сильный ливень",
-    85: "Снегопад",
-    86: "Сильный снегопад",
-    95: "Гроза",
-    96: "Гроза с градом",
-    99: "Сильная гроза с градом",
+    0: "ясно",
+    1: "малооблачно",
+    2: "переменная облачность",
+    3: "облачно",
+    45: "туман",
+    48: "изморозь",
+    51: "слабая морось",
+    53: "морось",
+    55: "сильная морось",
+    56: "ледяная морось",
+    57: "сильная ледяная морось",
+    61: "небольшой дождь",
+    63: "дождь",
+    65: "сильный дождь",
+    66: "ледяной дождь",
+    67: "сильный ледяной дождь",
+    71: "небольшой снег",
+    73: "снег",
+    75: "сильный снег",
+    77: "снежная крупа",
+    80: "ливень",
+    81: "сильный ливень",
+    82: "очень сильный ливень",
+    85: "снегопад",
+    86: "сильный снегопад",
+    95: "гроза",
+    96: "гроза с градом",
+    99: "сильная гроза с градом",
 }
 
 
 # JavaScript's Math.round, which the page used: .5 always goes up.
 def round_half(value):
-    return math.floor(float(value) + 0.5)
+    return int(math.floor(float(value) + 0.5))
 
 
 def fetch_json(url):
@@ -66,11 +70,17 @@ def fetch_json(url):
 
 
 def fetch_weather(lat, lon):
-    query = (
-        "latitude={lat}&longitude={lon}"
-        "&current=temperature_2m,weather_code,cloud_cover"
-        "&hourly=precipitation&forecast_days=1&timezone=auto"
-    ).format(lat=lat, lon=lon)
+    query = urllib.parse.urlencode(
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "current": "temperature_2m,weather_code,cloud_cover",
+            "daily": "temperature_2m_min,temperature_2m_max,precipitation_sum,weather_code",
+            "forecast_days": 2,
+            "timezone": "auto",
+        },
+        safe=",",
+    )
 
     last_error = None
     for template in FORECAST_URLS:
@@ -81,37 +91,75 @@ def fetch_weather(lat, lon):
     raise last_error if last_error else RuntimeError("no forecast host answered")
 
 
-def precipitation_next_hours(data, hours=6):
-    current = data.get("current", {}).get("time", "")
-    hour = current[:13] + ":00" if len(current) >= 13 else ""
-    times = data.get("hourly", {}).get("time", [])
-    values = data.get("hourly", {}).get("precipitation", [])
-    if hour not in times:
-        return 0.0
-    start = times.index(hour)
-    window = values[start : start + hours]
-    return sum(value for value in window if isinstance(value, (int, float)))
-
-
 def describe(code):
-    return WMO.get(int(code or 0), "Погода без описания")
+    try:
+        number = int(code or 0)
+    except (TypeError, ValueError):
+        number = 0
+    return WMO.get(number, "погода без описания")
+
+
+def sentence(text):
+    return text[:1].upper() + text[1:] if text else text
+
+
+def signed(value):
+    number = round_half(value)
+    return ("+" if number >= 0 else "-") + str(abs(number))
+
+
+def plain(value):
+    return str(round_half(value))
+
+
+def millimetres(value):
+    text = ("%.1f" % round(float(value), 1)).rstrip("0").rstrip(".")
+    return text.replace(".", ",")
+
+
+def current_part(city, data):
+    current = data.get("current") or {}
+    return "Погода в {place}: {desc}, {temp}°C, облачность {cloud}%".format(
+        place=city["place"],
+        desc=sentence(describe(current.get("weather_code"))),
+        temp=plain(current.get("temperature_2m", 0)),
+        cloud=round_half(current.get("cloud_cover", 0)),
+    )
+
+
+def tomorrow_part(data):
+    daily = data.get("daily") or {}
+    codes = daily.get("weather_code") or []
+    lows = daily.get("temperature_2m_min") or []
+    highs = daily.get("temperature_2m_max") or []
+    sums = daily.get("precipitation_sum") or []
+
+    if len(codes) < 2 or len(lows) < 2 or len(highs) < 2:
+        return ""
+    if lows[1] is None or highs[1] is None:
+        return ""
+
+    pieces = [
+        "Завтра: " + describe(codes[1]),
+        signed(lows[1]) + "…" + signed(highs[1]) + "°C",
+    ]
+
+    amount = sums[1] if len(sums) >= 2 else None
+    if isinstance(amount, (int, float)):
+        pieces.append("без осадков" if amount < 0.05 else "осадки до " + millimetres(amount) + " мм")
+
+    return ", ".join(pieces)
 
 
 def build_line(city, data):
-    current = data["current"]
-    temperature = round_half(current["temperature_2m"])
-    cloudiness = round_half(current.get("cloud_cover", 0))
-    code = int(current.get("weather_code", 0))
-    amount = precipitation_next_hours(data)
+    head = current_part(city, data)
+    tail = tomorrow_part(data)
 
-    if amount > 0.1:
-        tail = "в ближайшее время ожидаются осадки"
-    else:
-        tail = "в ближайшее время осадков не ожидается"
-
-    return "Погода в {place}: {desc}, {temp}°C, облачность {cloud}%, {tail}".format(
-        place=city["place"], desc=describe(code), temp=temperature, cloud=cloudiness, tail=tail
-    )
+    variants = ([head + ". " + tail] if tail else []) + [head]
+    for line in variants:
+        if len(line) <= MAX_LENGTH:
+            return line
+    return variants[-1][:MAX_LENGTH].rstrip()
 
 
 def main():
